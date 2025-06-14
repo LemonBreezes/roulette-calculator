@@ -36,7 +36,7 @@
   "European roulette wheel number sequence.")
 
 (defconst rc-american-numbers
-  [0 28 9 26 30 11 7 20 32 17 5 22 34 15 3 24 36 13 1 00 27 10 25 29 12 8 19 31 18 6 21 33 16 4 23 35 14 2]
+  [0 28 9 26 30 11 7 20 32 17 5 22 34 15 3 24 36 13 1 00 27 10 25 29 12 8 19 31 18 6 21 33 16 4 23 35 14 2 37]
   "American roulette wheel number sequence (00 represented as 37).")
 
 (defconst rc-red-numbers
@@ -680,16 +680,28 @@
   "Parse INPUT string into a list of numbers, splitting by non-digit characters."
   (let ((numbers '())
         (current-num "")
-        (i 0))
+        (i 0)
+        (prev-char nil))
     (while (< i (length input))
       (let ((char (aref input i)))
         (if (and (>= char ?0) (<= char ?9))
-            (setq current-num (concat current-num (char-to-string char)))
-          (when (> (length current-num) 0)
+            (progn
+              (setq current-num (concat current-num (char-to-string char)))
+              ;; Check for "00" pattern
+              (when (and (= char ?0) 
+                         (= prev-char ?0)
+                         (= (length current-num) 2)
+                         (string= current-num "00"))
+                (setq numbers (cons 37 numbers))  ; 00 is represented as 37
+                (setq current-num "")))
+          (when (and (> (length current-num) 0)
+                     (not (string= current-num "00")))  ; Don't add "00" as 0
             (push (string-to-number current-num) numbers)
-            (setq current-num ""))))
+            (setq current-num "")))
+        (setq prev-char char))
       (setq i (1+ i)))
-    (when (> (length current-num) 0)
+    (when (and (> (length current-num) 0)
+               (not (string= current-num "00")))
       (push (string-to-number current-num) numbers))
     (nreverse numbers)))
 
@@ -705,12 +717,18 @@
       ;; Validate numbers for the game type
       (dolist (num numbers)
         (cond
+         ;; Valid single zero and regular numbers (0-36) for both game types
          ((and (>= num 0) (<= num 36))
           (push num valid-numbers))
+         ;; Double zero (represented as 37) only valid for American roulette
          ((and (= num 37) (eq rc-game-type 'american))
           (push num valid-numbers))
+         ;; Any other number is invalid
          (t
-          (message "Warning: Ignoring invalid number %d" num))))
+          (let ((display-num (if (= num 37) "00" (number-to-string num))))
+            (message "Warning: Ignoring invalid number %s (not on %s roulette wheel)" 
+                     display-num
+                     (if (eq rc-game-type 'american) "American" "European"))))))
       
       (setq valid-numbers (nreverse valid-numbers))
       
