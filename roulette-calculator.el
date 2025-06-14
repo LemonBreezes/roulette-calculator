@@ -207,25 +207,58 @@
                        (roulette-get-special-bet-chips (roulette-bet-type bet)))))
     (cond
      ((eq (roulette-bet-type bet) 'voisins)
-      ;; Voisins uses 9 chips: 2 on 0-2-3, 1 on splits 4-7, 12-15, 18-21, 19-22, 32-35, 2 on corner 25-29
+      ;; Voisins du Zéro uses 9 chips placed as follows:
+      ;; - 2 chips on 0-2-3 trio (pays 11:1, returns 12x per chip)
+      ;; - 2 chips on 25-26-28-29 corner (pays 8:1, returns 9x per chip)
+      ;; - 1 chip each on splits: 4-7, 12-15, 18-21, 19-22, 32-35 (pays 17:1, returns 18x per chip)
       (cond
-       ((memq winning-number '(0 2 3)) (* chip-value 2 12))  ; 2 chips on trio at 11:1
-       ((memq winning-number '(25 26 28 29)) (* chip-value 2 9)) ; 2 chips on corner at 8:1
-       ((memq winning-number '(4 7 12 15 18 21 19 22 32 35)) (* chip-value 18)) ; 1 chip on splits at 17:1
-       (t 0)))
+       ;; Trio bet on 0-2-3 with 2 chips
+       ((memq winning-number '(0 2 3)) 
+        (* chip-value 24))  ; 2 chips × 12 (11:1 + stake) = 24 chips return
+       
+       ;; Corner bet on 25-26-28-29 with 2 chips
+       ((memq winning-number '(25 26 28 29)) 
+        (* chip-value 18))  ; 2 chips × 9 (8:1 + stake) = 18 chips return
+       
+       ;; Split bets with 1 chip each
+       ;; 4-7 split
+       ((memq winning-number '(4 7)) (* chip-value 18))
+       ;; 12-15 split
+       ((memq winning-number '(12 15)) (* chip-value 18))
+       ;; 18-21 split
+       ((memq winning-number '(18 21)) (* chip-value 18))
+       ;; 19-22 split
+       ((memq winning-number '(19 22)) (* chip-value 18))
+       ;; 32-35 split
+       ((memq winning-number '(32 35)) (* chip-value 18))
+       
+       (t 0)))  ; Number not covered by Voisins
 
      ((eq (roulette-bet-type bet) 'orphelins)
-      ;; Orphelins uses 5 chips: 1 straight on 1, 1 on splits 6-9, 14-17, 17-20, 31-34
+      ;; Orphelins uses 5 chips placed as follows:
+      ;; - 1 chip straight up on 1 (pays 35:1, returns 36x)
+      ;; - 1 chip each on splits: 6-9, 14-17, 17-20, 31-34 (pays 17:1, returns 18x per chip)
+      ;; Note: 17 is covered by two splits, so it wins twice
       (cond
-       ((= winning-number 1) (* chip-value 36))  ; Straight up at 35:1
-       ((= winning-number 17) (* chip-value 36)) ; Covered by two splits, wins twice
-       ((memq winning-number '(6 9 14 20 31 34)) (* chip-value 18)) ; Splits at 17:1
-       (t 0)))
+       ;; Straight up bet on 1
+       ((= winning-number 1) 
+        (* chip-value 36))  ; 1 chip × 36 (35:1 + stake) = 36 chips return
+       
+       ;; Number 17 is special - covered by both 14-17 and 17-20 splits
+       ((= winning-number 17) 
+        (* chip-value 36))  ; Win on two splits: 18 + 18 = 36 chips return
+       
+       ;; Single split coverage
+       ((memq winning-number '(6 9 14 20 31 34)) 
+        (* chip-value 18))  ; 1 chip × 18 (17:1 + stake) = 18 chips return
+       
+       (t 0)))  ; Number not covered by Orphelins
 
      ((eq (roulette-bet-type bet) 'tiers)
-      ;; Tiers uses 6 chips on splits: 5-8, 10-11, 13-16, 23-24, 27-30, 33-36
+      ;; Tiers du Cylindre uses 6 chips on splits: 5-8, 10-11, 13-16, 23-24, 27-30, 33-36
+      ;; All are split bets (pays 17:1, returns 18x per chip)
       (if (memq winning-number (roulette-bet-numbers bet))
-          (* chip-value 18)  ; All are split bets at 17:1
+          (* chip-value 18)  ; 1 chip × 18 (17:1 + stake) = 18 chips return
         0))
 
      (t 0))))
@@ -247,7 +280,7 @@
   (let ((color (roulette-number-color number)))
     (cond
      ((eq color 'red) '(face (:foreground "red" :weight bold)))
-     ((eq color 'black) '(face (:foreground "black" :weight bold)))
+     ((eq color 'black) '(face (:foreground "gray50" :weight bold)))
      ((eq color 'green) '(face (:foreground "green" :weight bold)))
      (t nil))))
 
@@ -305,26 +338,82 @@
     (define-key map "?" 'roulette-show-help)
     (define-key map "q" 'quit-window)
     (define-key map "r" 'roulette-reset-bankroll)
-    (define-key map "v" 'roulette-place-voisins)
-    (define-key map "o" 'roulette-place-orphelins)
-    (define-key map "i" 'roulette-place-tiers)
     (define-key map "m" 'roulette-martingale-mode)
     (define-key map "f" 'roulette-fibonacci-mode)
     (define-key map "l" 'roulette-labouchere-mode)
+    (define-key map "a" 'roulette-analyze-sequence)
     map)
   "Keymap for roulette calculator mode.")
 
 (define-derived-mode roulette-mode special-mode "Roulette"
   "Major mode for roulette calculator.
 \\{roulette-mode-map}"
-  (setq buffer-read-only t))
+  (setq buffer-read-only t)
+  ;; Set up Evil keybindings if Evil is loaded
+  (when (and (boundp 'evil-mode) evil-mode)
+    (evil-define-key 'normal roulette-mode-map
+      "s" 'roulette-spin-wheel
+      "b" 'roulette-place-bet
+      "c" 'roulette-clear-bets
+      "t" 'roulette-toggle-game-type
+      "h" 'roulette-show-history
+      "?" 'roulette-show-help
+      "q" 'quit-window
+      "r" 'roulette-reset-bankroll
+      "m" 'roulette-martingale-mode
+      "f" 'roulette-fibonacci-mode
+      "l" 'roulette-labouchere-mode
+      "a" 'roulette-analyze-sequence)))
+
+(defun roulette-calculate-all-outcomes ()
+  "Calculate all possible outcomes and their net results for current bets."
+  (let ((outcomes '())
+        (total-numbers (if (eq roulette-game-type 'american) 38 37)))
+    ;; Check each possible number
+    (dotimes (num total-numbers)
+      (let ((net-result 0)
+            (total-bet 0))
+        ;; Calculate result for each bet
+        (dolist (bet roulette-current-bets)
+          (setq total-bet (+ total-bet (roulette-bet-amount bet)))
+          (setq net-result (+ net-result (roulette-calculate-bet-result bet num))))
+        ;; Store outcome
+        (push (list :number num :net net-result :total-return (+ total-bet net-result)) outcomes)))
+    (nreverse outcomes)))
+
+(defun roulette-group-outcomes-by-net ()
+  "Group outcomes by net result and calculate probabilities."
+  (let ((outcomes (roulette-calculate-all-outcomes))
+        (grouped '())
+        (total-numbers (if (eq roulette-game-type 'american) 38 37)))
+    ;; Group by net result
+    (dolist (outcome outcomes)
+      (let* ((net (plist-get outcome :net))
+             (existing (assoc net grouped)))
+        (if existing
+            (setcdr existing (cons outcome (cdr existing)))
+          (push (list net outcome) grouped))))
+    ;; Calculate probabilities and sort
+    (let ((results '()))
+      (dolist (group grouped)
+        (let* ((net (car group))
+               (outcomes (cdr group))
+               (count (length outcomes))
+               (probability (/ (float count) total-numbers)))
+          (push (list :net net
+                      :probability probability
+                      :count count
+                      :numbers (mapcar (lambda (o) (plist-get o :number)) outcomes))
+                results)))
+      ;; Sort by net result (descending)
+      (sort results (lambda (a b) (> (plist-get a :net) (plist-get b :net)))))))
 
 (defun roulette-render-interface ()
   "Render the main roulette interface."
   (let ((inhibit-read-only t))
     (erase-buffer)
     (insert (propertize "ROULETTE CALCULATOR\n" 'face '(:height 1.5 :weight bold)))
-    (insert (propertize "═══════════════════\n\n" 'face 'bold))
+    (insert (propertize "════════════════════════════\n\n" 'face 'bold))
 
     ;; Game info
     (insert (format "Game Type: %s Roulette\n"
@@ -354,7 +443,39 @@
                               (mapconcat 'roulette-format-number
                                          (roulette-bet-numbers bet) ", ")))))
           (insert "\n"))
-        (insert (format "\nTotal at risk: $%.2f\n" total-bet))))
+        (insert (format "\nTotal at risk: $%.2f\n" total-bet))
+        
+        ;; Show outcome probabilities
+        (insert "\n")
+        (insert (propertize "Possible Outcomes:\n" 'face 'bold))
+        (insert "──────────────────\n")
+        (let ((grouped-outcomes (roulette-group-outcomes-by-net)))
+          (dolist (outcome grouped-outcomes)
+            (let ((net (plist-get outcome :net))
+                  (prob (plist-get outcome :probability))
+                  (count (plist-get outcome :count))
+                  (numbers (plist-get outcome :numbers)))
+              (insert (format "• Net: $%+.2f (%.1f%% - %d/%d) on: "
+                              net
+                              (* 100 prob)
+                              count
+                              (if (eq roulette-game-type 'american) 38 37)))
+              (let ((first t))
+                (dolist (num (sort numbers '<))
+                  (unless first (insert ", "))
+                  (setq first nil)
+                  (let ((num-str (roulette-format-number num)))
+                    (insert (apply 'propertize num-str
+                                   (roulette-number-display-properties num))))))
+              (insert "\n")))
+          (insert "\n")
+          ;; Show expected value
+          (let ((ev 0))
+            (dolist (outcome grouped-outcomes)
+              (setq ev (+ ev (* (plist-get outcome :net) (plist-get outcome :probability)))))
+            (insert (format "Expected Value: $%.4f (House Edge: %.2f%%)\n"
+                            ev
+                            (* -100 (/ ev total-bet))))))))
     (insert "\n")
 
     ;; Last spin results
@@ -373,9 +494,8 @@
     (insert "─────────\n")
     (insert "s - Spin wheel          b - Place bet         c - Clear bets\n")
     (insert "t - Toggle game type    h - Show history      r - Reset bankroll\n")
-    (insert "v - Voisins bet         o - Orphelins bet     i - Tiers bet\n")
     (insert "m - Martingale mode     f - Fibonacci mode    l - Labouchere mode\n")
-    (insert "? - Help                q - Quit\n")))
+    (insert "a - Analyze sequence    ? - Help              q - Quit\n")))
 
 (defun roulette-spin-wheel ()
   "Spin the roulette wheel and calculate results."
@@ -423,12 +543,28 @@
                       ("Even" . even)
                       ("Odd" . odd)
                       ("Low (1-18)" . low)
-                      ("High (19-36)" . high)))
+                      ("High (19-36)" . high)
+                      ("Voisins du Zero (9 chips)" . voisins)
+                      ("Orphelins (5 chips)" . orphelins)
+                      ("Tiers du Cylindre (6 chips)" . tiers)))
          (bet-type-name (completing-read "Bet type: "
                                          (mapcar 'car bet-types) nil t))
          (bet-type (cdr (assoc bet-type-name bet-types)))
-         (amount (read-number "Bet amount: $" 10))
-         (numbers (roulette-get-bet-numbers bet-type)))
+         amount numbers)
+
+    ;; Handle special bets differently
+    (cond
+     ((memq bet-type '(voisins orphelins tiers))
+      (let* ((chips-needed (roulette-get-special-bet-chips bet-type))
+             (chip-value (read-number (format "Chip value (need %d chips): $" chips-needed) 10)))
+        (setq amount (* chip-value chips-needed))
+        (setq numbers (cond
+                       ((eq bet-type 'voisins) (append roulette-voisins-numbers nil))
+                       ((eq bet-type 'orphelins) (append roulette-orphelins-numbers nil))
+                       ((eq bet-type 'tiers) (append roulette-tiers-numbers nil))))))
+     (t
+      (setq amount (read-number "Bet amount: $" 10))
+      (setq numbers (roulette-get-bet-numbers bet-type))))
 
     (when (> amount roulette-bankroll)
       (error "Insufficient bankroll"))
@@ -492,59 +628,6 @@
     (setq roulette-bankroll amount)
     (roulette-render-interface)))
 
-(defun roulette-place-voisins ()
-  "Place a Voisins du Zero bet."
-  (interactive)
-  (let* ((chip-value (read-number "Chip value: $" 10))
-         (amount (* chip-value 9)))
-    (when (> amount roulette-bankroll)
-      (error "Insufficient bankroll (need $%.2f for 9 chips @ $%.2f)" amount chip-value))
-
-    (push (make-roulette-bet :type 'voisins
-                              :numbers (append roulette-voisins-numbers nil)
-                              :amount amount
-                              :payout nil)
-          roulette-current-bets)
-
-    (setq roulette-bankroll (- roulette-bankroll amount))
-    (roulette-render-interface)
-    (message "Placed Voisins du Zero bet: 9 chips @ $%.2f = $%.2f total" chip-value amount)))
-
-(defun roulette-place-orphelins ()
-  "Place an Orphelins bet."
-  (interactive)
-  (let* ((chip-value (read-number "Chip value: $" 10))
-         (amount (* chip-value 5)))
-    (when (> amount roulette-bankroll)
-      (error "Insufficient bankroll (need $%.2f for 5 chips @ $%.2f)" amount chip-value))
-
-    (push (make-roulette-bet :type 'orphelins
-                              :numbers (append roulette-orphelins-numbers nil)
-                              :amount amount
-                              :payout nil)
-          roulette-current-bets)
-
-    (setq roulette-bankroll (- roulette-bankroll amount))
-    (roulette-render-interface)
-    (message "Placed Orphelins bet: 5 chips @ $%.2f = $%.2f total" chip-value amount)))
-
-(defun roulette-place-tiers ()
-  "Place a Tiers du Cylindre bet."
-  (interactive)
-  (let* ((chip-value (read-number "Chip value: $" 10))
-         (amount (* chip-value 6)))
-    (when (> amount roulette-bankroll)
-      (error "Insufficient bankroll (need $%.2f for 6 chips @ $%.2f)" amount chip-value))
-
-    (push (make-roulette-bet :type 'tiers
-                              :numbers (append roulette-tiers-numbers nil)
-                              :amount amount
-                              :payout nil)
-          roulette-current-bets)
-
-    (setq roulette-bankroll (- roulette-bankroll amount))
-    (roulette-render-interface)
-    (message "Placed Tiers du Cylindre bet: 6 chips @ $%.2f = $%.2f total" chip-value amount)))
 
 (defun roulette-show-help ()
   "Show help for roulette calculator."
@@ -578,6 +661,253 @@
 
 (defvar roulette-strategy-state nil
   "State for current betting strategy.")
+
+(defun roulette-normal-cdf (z)
+  "Approximate normal cumulative distribution function for Z-score."
+  ;; Using Abramowitz and Stegun approximation
+  (let* ((abs-z (abs z))
+         (t-val (/ 1.0 (+ 1.0 (* 0.2316419 abs-z))))
+         (poly (* t-val 
+                  (+ 0.319381530
+                     (* t-val (+ -0.356563782
+                                 (* t-val (+ 1.781477937
+                                             (* t-val (+ -1.821255978
+                                                         (* t-val 1.330274429))))))))))
+         (cdf (- 1.0 (* poly (exp (- (* 0.5 abs-z abs-z))) 0.3989422804))))
+    (if (< z 0) (- 1.0 cdf) cdf)))
+
+(defun roulette-parse-number-sequence (input)
+  "Parse INPUT string into a list of numbers, splitting by non-digit characters."
+  (let ((numbers '())
+        (current-num "")
+        (i 0))
+    (while (< i (length input))
+      (let ((char (aref input i)))
+        (if (and (>= char ?0) (<= char ?9))
+            (setq current-num (concat current-num (char-to-string char)))
+          (when (> (length current-num) 0)
+            (push (string-to-number current-num) numbers)
+            (setq current-num ""))))
+      (setq i (1+ i)))
+    (when (> (length current-num) 0)
+      (push (string-to-number current-num) numbers))
+    (nreverse numbers)))
+
+(defun roulette-analyze-sequence ()
+  "Analyze current bets against a sequence of numbers."
+  (interactive)
+  (if (null roulette-current-bets)
+      (message "No bets placed! Place some bets first, then analyze.")
+    (let* ((input (read-string "Enter number sequence (separated by any non-digit): "))
+           (numbers (roulette-parse-number-sequence input))
+           (valid-numbers '()))
+      
+      ;; Validate numbers for the game type
+      (dolist (num numbers)
+        (cond
+         ((and (>= num 0) (<= num 36))
+          (push num valid-numbers))
+         ((and (= num 37) (eq roulette-game-type 'american))
+          (push num valid-numbers))
+         (t
+          (message "Warning: Ignoring invalid number %d" num))))
+      
+      (setq valid-numbers (nreverse valid-numbers))
+      
+      (if (null valid-numbers)
+          (message "No valid numbers in sequence!")
+        (roulette-show-sequence-analysis valid-numbers)))))
+
+(defun roulette-show-sequence-analysis (numbers)
+  "Show analysis of current bets against NUMBERS sequence."
+  (with-current-buffer (get-buffer-create "*Roulette Sequence Analysis*")
+    (erase-buffer)
+    (insert "ROULETTE SEQUENCE ANALYSIS\n")
+    (insert "==========================\n\n")
+    
+    ;; Show current bets
+    (insert (propertize "Current Bets:\n" 'face 'bold))
+    (insert "─────────────\n")
+    (let ((total-bet 0))
+      (dolist (bet roulette-current-bets)
+        (setq total-bet (+ total-bet (roulette-bet-amount bet)))
+        (insert (format "• %s: $%.2f"
+                        (capitalize (symbol-name (roulette-bet-type bet)))
+                        (roulette-bet-amount bet)))
+        (when (memq (roulette-bet-type bet) '(voisins orphelins tiers))
+          (insert (format " (%d chips @ $%.2f)"
+                          (roulette-get-special-bet-chips (roulette-bet-type bet))
+                          (/ (roulette-bet-amount bet)
+                             (roulette-get-special-bet-chips (roulette-bet-type bet))))))
+        (insert "\n"))
+      (insert (format "\nTotal bet per spin: $%.2f\n\n" total-bet)))
+    
+    ;; Show sequence
+    (insert (propertize "Number Sequence:\n" 'face 'bold))
+    (insert "────────────────\n")
+    (let ((first t))
+      (dolist (num numbers)
+        (unless first (insert ", "))
+        (setq first nil)
+        (let ((num-str (roulette-format-number num)))
+          (insert (apply 'propertize num-str
+                         (roulette-number-display-properties num))))))
+    (insert (format "\n(%d numbers)\n\n" (length numbers)))
+    
+    ;; Calculate results
+    (insert (propertize "Results:\n" 'face 'bold))
+    (insert "────────\n")
+    (let ((running-total 0)
+          (wins 0)
+          (losses 0)
+          (spin-results '()))
+      
+      (dolist (num numbers)
+        (let ((spin-net 0)
+              (total-bet 0))
+          (dolist (bet roulette-current-bets)
+            (setq total-bet (+ total-bet (roulette-bet-amount bet)))
+            (setq spin-net (+ spin-net (roulette-calculate-bet-result bet num))))
+          
+          (setq running-total (+ running-total spin-net))
+          (if (>= spin-net 0)
+              (setq wins (1+ wins))
+            (setq losses (1+ losses)))
+          
+          (push (list :number num :net spin-net :total running-total) spin-results)))
+      
+      (setq spin-results (nreverse spin-results))
+      
+      ;; Show spin-by-spin results
+      (insert "Spin-by-spin results:\n")
+      (let ((spin-num 1))
+        (dolist (result spin-results)
+          (let ((num (plist-get result :number))
+                (net (plist-get result :net))
+                (total (plist-get result :total)))
+            (insert (format "%3d. " spin-num))
+            (insert (apply 'propertize (roulette-format-number num)
+                           (roulette-number-display-properties num)))
+            (insert (format " → Net: $%+.2f, Total: $%+.2f\n" net total))
+            (setq spin-num (1+ spin-num)))))
+      
+      (insert "\n")
+      (insert (propertize "Summary:\n" 'face 'bold))
+      (insert "────────\n")
+      (insert (format "Total spins: %d\n" (length numbers)))
+      (insert (format "Wins: %d (%.1f%%)\n" wins (* 100.0 (/ wins (float (length numbers))))))
+      (insert (format "Losses: %d (%.1f%%)\n" losses (* 100.0 (/ losses (float (length numbers))))))
+      (insert (format "Final P/L: $%+.2f\n" running-total))
+      (insert (format "Average per spin: $%+.2f\n" (/ running-total (float (length numbers)))))
+      
+      ;; Calculate theoretical house edge and expected loss
+      (let* ((total-bet-per-spin 0)
+             (expected-value 0)
+             (total-wagered 0))
+        (dolist (bet roulette-current-bets)
+          (setq total-bet-per-spin (+ total-bet-per-spin (roulette-bet-amount bet))))
+        
+        (setq total-wagered (* total-bet-per-spin (length numbers)))
+        
+        ;; Calculate expected value using the grouped outcomes
+        (let ((grouped-outcomes (roulette-group-outcomes-by-net)))
+          (dolist (outcome grouped-outcomes)
+            (setq expected-value (+ expected-value 
+                                    (* (plist-get outcome :net) 
+                                       (plist-get outcome :probability))))))
+        
+        (let* ((theoretical-house-edge (* -100 (/ expected-value total-bet-per-spin)))
+               (observed-house-edge (if (zerop total-wagered) 0
+                                      (* -100.0 (/ (float running-total) total-wagered))))
+               (theoretical-loss (* (length numbers) expected-value))
+               (actual-vs-expected (- running-total theoretical-loss)))
+          
+          (insert "\n")
+          (insert (propertize "Statistical Analysis:\n" 'face 'bold))
+          (insert "────────────────────\n")
+          (insert (format "Observed house edge: %.2f%% (from this sequence)\n" observed-house-edge))
+          (insert (format "Theoretical house edge: %.2f%% (mathematical expectation)\n" theoretical-house-edge))
+          (insert (format "Total wagered: $%.2f\n" total-wagered))
+          (insert (format "Expected loss: $%.2f\n" theoretical-loss))
+          (insert (format "Actual result: $%+.2f\n" running-total))
+          (insert (format "Variance from expected: $%+.2f\n" actual-vs-expected))
+          
+          ;; Calculate standard deviation and z-score
+          ;; For each spin, calculate variance of outcomes
+          (let* ((outcome-values '())
+                 (outcome-probs '())
+                 (variance 0))
+            
+            ;; Get all possible outcomes and their probabilities
+            (let ((grouped (roulette-group-outcomes-by-net)))
+              (dolist (outcome grouped)
+                (push (plist-get outcome :net) outcome-values)
+                (push (plist-get outcome :probability) outcome-probs)))
+            
+            ;; Calculate variance for single spin
+            (let ((i 0))
+              (while (< i (length outcome-values))
+                (let ((value (nth i outcome-values))
+                      (prob (nth i outcome-probs)))
+                  (setq variance (+ variance (* prob (expt (- value expected-value) 2)))))
+                (setq i (1+ i))))
+            
+            ;; Standard deviation for n spins
+            (let* ((std-dev-single (sqrt variance))
+                   (std-dev-total (* std-dev-single (sqrt (length numbers))))
+                   (z-score (if (zerop std-dev-total) 0 
+                              (/ (- running-total theoretical-loss) std-dev-total)))
+                   ;; Calculate probability using normal approximation
+                   ;; For two-tailed test
+                   (p-value (if (< z-score 0)
+                                (* 2 (roulette-normal-cdf z-score))
+                              (* 2 (- 1 (roulette-normal-cdf z-score))))))
+              
+              (insert "\n")
+              (insert (propertize "Probability Analysis:\n" 'face 'bold))
+              (insert "────────────────────\n")
+              (insert (format "Standard deviation (single spin): $%.2f\n" std-dev-single))
+              (insert (format "Standard deviation (%d spins): $%.2f\n" (length numbers) std-dev-total))
+              (insert (format "Z-score: %.3f\n" z-score))
+              (insert (format "P-value: %.4f\n" p-value))
+              (insert (format "Probability of result this extreme: %.2f%%\n" (* 100 p-value)))
+              
+              (cond
+               ((< p-value 0.01)
+                (insert "\nThis result is HIGHLY UNUSUAL (p < 0.01)"))
+               ((< p-value 0.05)
+                (insert "\nThis result is statistically significant (p < 0.05)"))
+               ((< p-value 0.10)
+                (insert "\nThis result is somewhat unusual (p < 0.10)"))
+               (t
+                (insert "\nThis result is within normal variance")))))))
+
+      (insert "\n")
+      ;; Show best and worst streaks
+      (let ((current-streak 0)
+            (best-streak 0)
+            (worst-streak 0)
+            (current-type nil))
+        (dolist (result spin-results)
+          (let ((net (plist-get result :net)))
+            (cond
+             ((>= net 0)
+              (if (eq current-type 'win)
+                  (setq current-streak (1+ current-streak))
+                (setq current-streak 1
+                      current-type 'win))
+              (setq best-streak (max best-streak current-streak)))
+             (t
+              (if (eq current-type 'loss)
+                  (setq current-streak (1+ current-streak))
+                (setq current-streak 1
+                      current-type 'loss))
+              (setq worst-streak (max worst-streak current-streak))))))
+
+        (insert (format "Best winning streak: %d\n" best-streak))
+        (insert (format "Worst losing streak: %d\n" worst-streak)))))
+
+  (display-buffer (current-buffer)))
 
 (defun roulette-martingale-mode ()
   "Enable Martingale betting strategy."
