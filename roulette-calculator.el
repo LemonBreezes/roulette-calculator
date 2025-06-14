@@ -72,6 +72,9 @@
 (defvar rc-current-bets '()
   "Current bets for this spin.")
 
+(defvar rc-last-cleared-bets '()
+  "Last set of bets that were cleared.")
+
 (defvar rc-spin-history '()
   "History of spin results.")
 
@@ -321,6 +324,106 @@
     (+ (car sequence) (car (last sequence))))))
 
 ;; Interactive functions
+(defun rc-apply-betting-strategy (won-p)
+  "Apply the current betting strategy after a spin.
+WON-P indicates whether the last spin was a win."
+  (cond
+   ;; Martingale strategy
+   ((eq rc-strategy-mode 'martingale)
+    (let* ((base-bet (plist-get rc-strategy-state :base-bet))
+           (current-bet (plist-get rc-strategy-state :current-bet))
+           (new-bet (if won-p base-bet (* current-bet 2))))
+      ;; Update strategy state
+      (plist-put rc-strategy-state :current-bet new-bet)
+      (plist-put rc-strategy-state :last-won won-p)
+      ;; Clear current bets and place new bet
+      (when (and rc-current-bets 
+                 (member (rc-bet-type (car rc-current-bets)) 
+                         '(red black even odd low high)))
+        (let ((bet-type (rc-bet-type (car rc-current-bets))))
+          (setq rc-current-bets '())
+          ;; Check if we have enough bankroll
+          (if (> new-bet rc-bankroll)
+              (progn
+                (message "Martingale: Need $%d but only have $%.2f. Strategy paused." 
+                         new-bet rc-bankroll)
+                (setq rc-strategy-mode nil))
+            ;; Place the new bet
+            (push (make-roulette-calculator-bet :type bet-type
+                                                :numbers nil
+                                                :amount new-bet
+                                                :payout 1)
+                  rc-current-bets)
+            (message "Martingale: Next bet $%d on %s" new-bet bet-type))))))
+   
+   ;; Fibonacci strategy
+   ((eq rc-strategy-mode 'fibonacci)
+    (let* ((position (or (plist-get rc-strategy-state :position) 0))
+           (new-position (if won-p (max 0 (- position 2)) (1+ position)))
+           (fib-seq (rc-fibonacci-sequence 20))
+           (new-bet (nth new-position fib-seq)))
+      (plist-put rc-strategy-state :position new-position)
+      (plist-put rc-strategy-state :last-won won-p)
+      ;; Similar logic to Martingale for updating bets
+      (when (and rc-current-bets 
+                 (member (rc-bet-type (car rc-current-bets)) 
+                         '(red black even odd low high)))
+        (let ((bet-type (rc-bet-type (car rc-current-bets))))
+          (setq rc-current-bets '())
+          (if (> new-bet rc-bankroll)
+              (progn
+                (message "Fibonacci: Need $%d but only have $%.2f. Strategy paused." 
+                         new-bet rc-bankroll)
+                (setq rc-strategy-mode nil))
+            (push (make-roulette-calculator-bet :type bet-type
+                                                :numbers nil
+                                                :amount new-bet
+                                                :payout 1)
+                  rc-current-bets)
+            (message "Fibonacci: Position %d, next bet $%d on %s" 
+                     new-position new-bet bet-type))))))
+   
+   ;; Labouchere strategy
+   ((eq rc-strategy-mode 'labouchere)
+    (let* ((sequence (plist-get rc-strategy-state :sequence))
+           (bet-type (when (and rc-current-bets 
+                                (member (rc-bet-type (car rc-current-bets)) 
+                                        '(red black even odd low high)))
+                       (rc-bet-type (car rc-current-bets)))))
+      (when (and sequence bet-type)
+        (if won-p
+            ;; Remove first and last numbers
+            (setq sequence (if (> (length sequence) 2)
+                               (butlast (cdr sequence))
+                             nil))
+          ;; Add the sum of first and last to the end
+          (when sequence
+            (setq sequence (append sequence 
+                                   (list (+ (car sequence) 
+                                            (car (last sequence))))))))
+        (plist-put rc-strategy-state :sequence sequence)
+        ;; Calculate next bet
+        (if (null sequence)
+            (progn
+              (message "Labouchere: Sequence completed! Strategy disabled.")
+              (setq rc-strategy-mode nil))
+          (let ((new-bet (if (= (length sequence) 1)
+                             (car sequence)
+                           (+ (car sequence) (car (last sequence))))))
+            (setq rc-current-bets '())
+            (if (> new-bet rc-bankroll)
+                (progn
+                  (message "Labouchere: Need $%d but only have $%.2f. Strategy paused." 
+                           new-bet rc-bankroll)
+                  (setq rc-strategy-mode nil))
+              (push (make-roulette-calculator-bet :type bet-type
+                                                  :numbers nil
+                                                  :amount new-bet
+                                                  :payout 1)
+                    rc-current-bets)
+              (message "Labouchere: Sequence %s, next bet $%d on %s" 
+                       sequence new-bet bet-type)))))))))
+
 (defun rc-calculator ()
   "Start the roulette calculator."
   (interactive)
@@ -342,6 +445,7 @@
     (define-key map "f" 'rc-fibonacci-mode)
     (define-key map "l" 'rc-labouchere-mode)
     (define-key map "a" 'rc-analyze-sequence)
+    (define-key map "p" 'rc-repeat-last-bet)
     map)
   "Keymap for roulette calculator mode.")
 
@@ -363,7 +467,8 @@
       "m" 'rc-martingale-mode
       "f" 'rc-fibonacci-mode
       "l" 'rc-labouchere-mode
-      "a" 'rc-analyze-sequence)))
+      "a" 'rc-analyze-sequence
+      "p" 'rc-repeat-last-bet)))
 
 (defun rc-calculate-all-outcomes ()
   "Calculate all possible outcomes and their net results for current bets."
@@ -418,7 +523,25 @@
     ;; Game info
     (insert (format "Game Type: %s Roulette\n"
                     (capitalize (symbol-name rc-game-type))))
-    (insert (format "Bankroll: $%.2f\n\n" rc-bankroll))
+    (insert (format "Bankroll: $%.2f\n" rc-bankroll))
+    
+    ;; Show active betting strategy
+    (when rc-strategy-mode
+      (insert (format "Strategy: %s" (capitalize (symbol-name rc-strategy-mode))))
+      (cond
+       ((eq rc-strategy-mode 'martingale)
+        (insert (format " (Base: $%d, Current: $%d)\n"
+                        (plist-get rc-strategy-state :base-bet)
+                        (plist-get rc-strategy-state :current-bet))))
+       ((eq rc-strategy-mode 'fibonacci)
+        (insert (format " (Position: %d)\n"
+                        (or (plist-get rc-strategy-state :position) 0))))
+       ((eq rc-strategy-mode 'labouchere)
+        (insert (format " (Sequence: %s)\n"
+                        (plist-get rc-strategy-state :sequence))))
+       (t (insert "\n"))))
+    
+    (insert "\n")
 
     ;; Current bets
     (insert (propertize "Current Bets:\n" 'face 'bold))
@@ -493,9 +616,10 @@
     (insert (propertize "Commands:\n" 'face 'bold))
     (insert "─────────\n")
     (insert "s - Spin wheel          b - Place bet         c - Clear bets\n")
-    (insert "t - Toggle game type    h - Show history      r - Reset bankroll\n")
+    (insert "p - Repeat last bet     t - Toggle game type  h - Show history\n")
+    (insert "r - Reset bankroll      a - Analyze sequence  ? - Help\n")
     (insert "m - Martingale mode     f - Fibonacci mode    l - Labouchere mode\n")
-    (insert "a - Analyze sequence    ? - Help              q - Quit\n")))
+    (insert "q - Quit\n")))
 
 (defun rc-spin-wheel ()
   "Spin the roulette wheel and calculate results."
@@ -505,34 +629,51 @@
     (let ((result (rc-spin))
           (total-win 0)
           (total-bet 0))
-      (push result rc-spin-history)
-
+      
       ;; Calculate total bet amount
       (dolist (bet rc-current-bets)
         (setq total-bet (+ total-bet (rc-bet-amount bet))))
+      
+      ;; Check if player has enough bankroll for another spin with same bets
+      (when (> total-bet rc-bankroll)
+        (error "Insufficient bankroll for current bets! Clear some bets or add funds."))
+      
+      ;; Deduct bets from bankroll
+      (setq rc-bankroll (- rc-bankroll total-bet))
+      
+      ;; Add spin to history
+      (push result rc-spin-history)
 
-      ;; Calculate winnings for each bet
-      (dolist (bet rc-current-bets)
-        (let ((bet-result (rc-calculate-bet-result bet result)))
-          (setq total-win (+ total-win bet-result))))
+      ;; Calculate winnings for each bet and track if even-money bet won
+      (let ((even-money-bet-won nil))
+        (dolist (bet rc-current-bets)
+          (let ((bet-result (rc-calculate-bet-result bet result)))
+            (setq total-win (+ total-win bet-result))
+            ;; Check if this is an even-money bet and if it won
+            (when (and (member (rc-bet-type bet) '(red black even odd low high))
+                       (> bet-result 0))
+              (setq even-money-bet-won t))))
 
-      ;; Update bankroll
-      (setq rc-bankroll (+ rc-bankroll total-win))
+        ;; Update bankroll with winnings
+        (setq rc-bankroll (+ rc-bankroll total-win total-bet))
 
-      ;; Add to history and clear current bets
-      (push (list :spin result :bets rc-current-bets :net total-win) rc-bet-history)
-      (setq rc-current-bets '())
+        ;; Add to history (but keep current bets active)
+        (push (list :spin result :bets rc-current-bets :net total-win) rc-bet-history)
 
-      ;; Show result
-      (rc-render-interface)
-      (let ((result-str (rc-format-number result))
-            (color (rc-number-color result)))
-        (message "Spin result: %s (%s) - Bet: $%.2f, Win: $%.2f, Net: $%.2f"
-                 result-str 
-                 (capitalize (symbol-name color))
-                 total-bet 
-                 (+ total-bet total-win) 
-                 total-win)))))
+        ;; Show result
+        (rc-render-interface)
+        (let ((result-str (rc-format-number result))
+              (color (rc-number-color result)))
+          (message "Spin result: %s (%s) - Bet: $%.2f, Win: $%.2f, Net: $%.2f"
+                   result-str 
+                   (capitalize (symbol-name color))
+                   total-bet 
+                   (+ total-bet total-win) 
+                   total-win))
+        
+        ;; Apply betting strategy if active
+        (when rc-strategy-mode
+          (rc-apply-betting-strategy even-money-bet-won))))))
 
 (defun rc-place-bet ()
   "Place a bet interactively."
@@ -572,8 +713,12 @@
       (setq amount (read-number "Bet amount: $" 10))
       (setq numbers (rc-get-bet-numbers bet-type))))
 
-    (when (> amount rc-bankroll)
-      (error "Insufficient bankroll"))
+    ;; Check if total bets would exceed bankroll
+    (let ((total-bets amount))
+      (dolist (bet rc-current-bets)
+        (setq total-bets (+ total-bets (rc-bet-amount bet))))
+      (when (> total-bets rc-bankroll)
+        (error "Insufficient bankroll for total bets")))
 
     (push (make-roulette-calculator-bet :type bet-type
                                         :numbers numbers
@@ -581,7 +726,6 @@
                                         :payout (rc-get-payout bet-type))
           rc-current-bets)
 
-    (setq rc-bankroll (- rc-bankroll amount))
     (rc-render-interface)))
 
 (defun rc-read-roulette-number (prompt)
@@ -632,8 +776,8 @@ Handles 00 for American roulette."
 (defun rc-clear-bets ()
   "Clear all current bets."
   (interactive)
-  (dolist (bet rc-current-bets)
-    (setq rc-bankroll (+ rc-bankroll (rc-bet-amount bet))))
+  (when rc-current-bets
+    (setq rc-last-cleared-bets rc-current-bets))
   (setq rc-current-bets '())
   (rc-render-interface)
   (message "All bets cleared"))
@@ -652,6 +796,27 @@ Handles 00 for American roulette."
   (let ((amount (read-number "New bankroll amount: $" 1000)))
     (setq rc-bankroll amount)
     (rc-render-interface)))
+
+(defun rc-repeat-last-bet ()
+  "Repeat the last cleared bet if there is one."
+  (interactive)
+  (if (null rc-last-cleared-bets)
+      (message "No previous bets to repeat!")
+    ;; Check if we have enough bankroll for all the bets
+    (let ((total-amount 0))
+      (dolist (bet rc-last-cleared-bets)
+        (setq total-amount (+ total-amount (rc-bet-amount bet))))
+      (dolist (bet rc-current-bets)
+        (setq total-amount (+ total-amount (rc-bet-amount bet))))
+      (if (> total-amount rc-bankroll)
+          (message "Insufficient bankroll to repeat last bets!")
+        ;; Add all the last cleared bets to current bets
+        (dolist (bet rc-last-cleared-bets)
+          (push (copy-roulette-calculator-bet bet) rc-current-bets))
+        (rc-render-interface)
+        (message "Repeated %d bet(s) totaling $%.2f" 
+                 (length rc-last-cleared-bets)
+                 (apply '+ (mapcar 'rc-bet-amount rc-last-cleared-bets)))))))
 
 
 (defun rc-show-help ()
@@ -958,27 +1123,42 @@ Handles 00 for American roulette."
 (defun rc-martingale-mode ()
   "Enable Martingale betting strategy."
   (interactive)
-  (setq rc-strategy-mode 'martingale)
-  (setq rc-strategy-state '(:base-bet 10 :current-bet 10 :last-won nil))
-  (message "Martingale strategy enabled (base bet: $10)"))
+  (if (eq rc-strategy-mode 'martingale)
+      (progn
+        (setq rc-strategy-mode nil)
+        (message "Martingale strategy disabled"))
+    (setq rc-strategy-mode 'martingale)
+    (let ((base-bet (read-number "Base bet amount: $" 10)))
+      (setq rc-strategy-state (list :base-bet base-bet 
+                                    :current-bet base-bet 
+                                    :last-won nil))
+      (message "Martingale strategy enabled (base bet: $%d)" base-bet))))
 
 (defun rc-fibonacci-mode ()
   "Enable Fibonacci betting strategy."
   (interactive)
-  (setq rc-strategy-mode 'fibonacci)
-  (setq rc-strategy-state '(:position 0 :last-won nil))
-  (message "Fibonacci strategy enabled"))
+  (if (eq rc-strategy-mode 'fibonacci)
+      (progn
+        (setq rc-strategy-mode nil)
+        (message "Fibonacci strategy disabled"))
+    (setq rc-strategy-mode 'fibonacci)
+    (setq rc-strategy-state '(:position 0 :last-won nil))
+    (message "Fibonacci strategy enabled")))
 
 (defun rc-labouchere-mode ()
   "Enable Labouchere betting strategy."
   (interactive)
-  (setq rc-strategy-mode 'labouchere)
-  (let ((sequence (read-string "Enter number sequence (e.g., 1 2 3 4): ")))
-    (setq rc-strategy-state
-          (list :sequence (mapcar 'string-to-number (split-string sequence))
-                :original-sequence (mapcar 'string-to-number (split-string sequence))
-                :last-won nil)))
-  (message "Labouchere strategy enabled"))
+  (if (eq rc-strategy-mode 'labouchere)
+      (progn
+        (setq rc-strategy-mode nil)
+        (message "Labouchere strategy disabled"))
+    (setq rc-strategy-mode 'labouchere)
+    (let ((sequence (read-string "Enter number sequence (e.g., 1 2 3 4): ")))
+      (setq rc-strategy-state
+            (list :sequence (mapcar 'string-to-number (split-string sequence))
+                  :original-sequence (mapcar 'string-to-number (split-string sequence))
+                  :last-won nil)))
+    (message "Labouchere strategy enabled")))
 
 (defun rc-show-history ()
   "Show detailed betting history."
@@ -1013,7 +1193,7 @@ Handles 00 for American roulette."
             (when (rc-is-low num) (setq lows (1+ lows)))
             (when (rc-is-high num) (setq highs (1+ highs)))))
 
-        (let ((total (length rc-spin-history)))
+        (let ((total (float (length rc-spin-history))))
           (insert (format "Red: %d (%.1f%%)\n" reds (* 100.0 (/ reds total))))
           (insert (format "Black: %d (%.1f%%)\n" blacks (* 100.0 (/ blacks total))))
           (insert (format "Green: %d (%.1f%%)\n" greens (* 100.0 (/ greens total))))
