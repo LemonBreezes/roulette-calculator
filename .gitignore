@@ -15,3 +15,6 @@ dist/
 
 # Undo-tree save-files
 *.~undo-tree
+
+# Data files
+*.txt
