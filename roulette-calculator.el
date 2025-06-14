@@ -525,8 +525,14 @@
 
       ;; Show result
       (rc-render-interface)
-      (message "Spin result: %s - Bet: $%.2f, Win: $%.2f, Net: $%.2f"
-               (rc-format-number result) total-bet (+ total-bet total-win) total-win))))
+      (let ((result-str (rc-format-number result))
+            (color (rc-number-color result)))
+        (message "Spin result: %s (%s) - Bet: $%.2f, Win: $%.2f, Net: $%.2f"
+                 result-str 
+                 (capitalize (symbol-name color))
+                 total-bet 
+                 (+ total-bet total-win) 
+                 total-win)))))
 
 (defun rc-place-bet ()
   "Place a bet interactively."
@@ -578,14 +584,33 @@
     (setq rc-bankroll (- rc-bankroll amount))
     (rc-render-interface)))
 
+(defun rc-read-roulette-number (prompt)
+  "Read a roulette number from user input with PROMPT.
+Handles 00 for American roulette."
+  (let ((input (read-string prompt)))
+    (cond
+     ((string= input "00")
+      (if (eq rc-game-type 'american)
+          37  ; Internal representation of 00
+        (error "00 is only valid in American roulette")))
+     ((string-match-p "^[0-9]+$" input)
+      (let ((num (string-to-number input)))
+        (if (and (>= num 0) (<= num 36))
+            num
+          (error "Number must be between 0 and 36"))))
+     (t (error "Invalid input. Enter a number 0-36%s"
+               (if (eq rc-game-type 'american) " or 00" ""))))))
+
 (defun rc-get-bet-numbers (bet-type)
   "Get numbers for BET-TYPE interactively if needed."
   (cond
    ((eq bet-type 'straight)
-    (list (read-number "Number (0-36): ")))
+    (list (rc-read-roulette-number 
+           (format "Number (0-36%s): " 
+                   (if (eq rc-game-type 'american) " or 00" "")))))
    ((eq bet-type 'split)
-    (list (read-number "First number: ")
-          (read-number "Second number: ")))
+    (list (rc-read-roulette-number "First number: ")
+          (rc-read-roulette-number "Second number: ")))
    ((eq bet-type 'street)
     (let ((first (read-number "First number of street: ")))
       (list first (1+ first) (+ first 2))))
@@ -638,6 +663,8 @@
     (princ "Bet Types:\n")
     (princ "----------\n")
     (princ "• Straight: Single number (35:1)\n")
+    (princ "  - European: 0-36\n")
+    (princ "  - American: 0-36 and 00\n")
     (princ "• Split: Two adjacent numbers (17:1)\n")
     (princ "• Street: Three numbers in a row (11:1)\n")
     (princ "• Corner: Four numbers (8:1)\n")
@@ -689,6 +716,7 @@
               (setq current-num (concat current-num (char-to-string char)))
               ;; Check for "00" pattern
               (when (and (= char ?0) 
+                         prev-char  ; Check that prev-char is not nil
                          (= prev-char ?0)
                          (= (length current-num) 2)
                          (string= current-num "00"))
