@@ -2,6 +2,8 @@
 
 An elegant and comprehensive roulette betting calculator for Emacs, supporting both European and American roulette variants with advanced betting strategies and statistical analysis.
 
+![Roulette Calculator Screenshot](screenshot.png)
+
 ## Features
 
 ### Core Functionality
