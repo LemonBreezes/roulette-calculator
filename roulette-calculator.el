@@ -492,6 +492,7 @@ WON-P indicates whether the last spin was a win."
     (define-key map "l" 'rc-labouchere-mode)
     (define-key map "a" 'rc-analyze-sequence)
     (define-key map "p" 'rc-repeat-last-bet)
+    (define-key map "L" 'rc-toggle-strategy-loss-mode)
     map)
   "Keymap for roulette calculator mode.")
 
@@ -514,7 +515,8 @@ WON-P indicates whether the last spin was a win."
       "f" 'rc-fibonacci-mode
       "l" 'rc-labouchere-mode
       "a" 'rc-analyze-sequence
-      "p" 'rc-repeat-last-bet)
+      "p" 'rc-repeat-last-bet
+      "L" 'rc-toggle-strategy-loss-mode)
     (when (boundp 'evil-snipe-local-mode)
       (evil-snipe-local-mode -1))))
 
@@ -589,8 +591,16 @@ WON-P indicates whether the last spin was a win."
        ((eq rc-strategy-mode 'labouchere)
         (insert (format " (Sequence: %s)\n"
                         (plist-get rc-strategy-state :sequence))))
-       (t (insert "\n"))))
-    
+       (t (insert "\n")))
+      ;; Show loss mode for non-even-money bets
+      (unless (cl-some (lambda (bet) (member (rc-bet-type bet) 
+                                             '(red black even odd low high)))
+                       rc-current-bets)
+        (insert (format "Loss mode: %s\n" 
+                        (if rc-strategy-loss-on-partial-win 
+                            "Strict (net loss = loss)"
+                          "Lenient (no win = loss)")))))
+
     (insert "\n")
 
     ;; Current bets
@@ -617,7 +627,7 @@ WON-P indicates whether the last spin was a win."
                                          (rc-bet-numbers bet) ", ")))))
           (insert "\n"))
         (insert (format "\nTotal at risk: $%.2f\n" total-bet))
-        
+
         ;; Show outcome probabilities
         (insert "\n")
         (insert (propertize "Possible Outcomes:\n" 'face 'bold))
@@ -716,12 +726,15 @@ WON-P indicates whether the last spin was a win."
         ;; Apply betting strategy if active and get strategy info
         (let ((strategy-msg nil))
           (when rc-strategy-mode
-            ;; If no even-money bets, use overall net result
+            ;; Determine if this is a win for strategy purposes
             (let ((won (if has-even-money-bet
                            even-money-bet-won
-                         (> total-win 0))))
+                         ;; For non-even-money bets, check based on custom variable
+                         (if rc-strategy-loss-on-partial-win
+                             (> total-win 0)  ; Net profit required
+                           (> (+ total-bet total-win) 0)))))  ; Any winnings count
               (setq strategy-msg (rc-apply-betting-strategy won))))
-        
+
           ;; Show result with strategy info in one message
           (rc-render-interface)
           (let ((result-str (rc-format-number result))
@@ -884,6 +897,16 @@ Handles 00 for American roulette."
                  (length rc-last-cleared-bets)
                  (apply '+ (mapcar 'rc-bet-amount rc-last-cleared-bets)))))))
 
+(defun rc-toggle-strategy-loss-mode ()
+  "Toggle how betting strategies treat partial wins."
+  (interactive)
+  (setq rc-strategy-loss-on-partial-win (not rc-strategy-loss-on-partial-win))
+  (message "Strategy loss mode: %s"
+           (if rc-strategy-loss-on-partial-win
+               "Net loss = loss (strict)"
+             "No winnings = loss (lenient)"))
+  (rc-render-interface))
+
 
 (defun rc-show-help ()
   "Show help for roulette calculator."
@@ -919,6 +942,13 @@ Handles 00 for American roulette."
 
 (defvar rc-strategy-state nil
   "State for current betting strategy.")
+
+(defcustom rc-strategy-loss-on-partial-win nil
+  "If non-nil, betting strategies consider partial wins as losses.
+When t, if you win something but have a net loss, it's treated as a loss.
+When nil, only complete losses (winning nothing) are treated as losses."
+  :type 'boolean
+  :group 'roulette-calculator)
 
 (defun rc-normal-cdf (z)
   "Approximate normal cumulative distribution function for Z-score."
