@@ -18,6 +18,8 @@
 ;; with various betting strategies and special bets (voisins, orphelins, tiers)
 
 ;;; Code:
+(declare-function evil-define-key "evil-core")
+(declare-function evil-snipe-local-mode "evil-snipe")
 
 (require 'cl-lib)
 
@@ -512,7 +514,9 @@ WON-P indicates whether the last spin was a win."
       "f" 'rc-fibonacci-mode
       "l" 'rc-labouchere-mode
       "a" 'rc-analyze-sequence
-      "p" 'rc-repeat-last-bet)))
+      "p" 'rc-repeat-last-bet)
+    (when (boundp 'evil-snipe-local-mode)
+      (evil-snipe-local-mode -1))))
 
 (defun rc-calculate-all-outcomes ()
   "Calculate all possible outcomes and their net results for current bets."
