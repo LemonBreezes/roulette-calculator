@@ -493,6 +493,7 @@ WON-P indicates whether the last spin was a win."
     (define-key map "a" 'rc-analyze-sequence)
     (define-key map "p" 'rc-repeat-last-bet)
     (define-key map "L" 'rc-toggle-strategy-loss-mode)
+    (define-key map "*" 'rc-multiply-bets)
     map)
   "Keymap for roulette calculator mode.")
 
@@ -516,7 +517,8 @@ WON-P indicates whether the last spin was a win."
       "l" 'rc-labouchere-mode
       "a" 'rc-analyze-sequence
       "p" 'rc-repeat-last-bet
-      "L" 'rc-toggle-strategy-loss-mode)
+      "L" 'rc-toggle-strategy-loss-mode
+      "*" 'rc-multiply-bets)
     (when (boundp 'evil-snipe-local-mode)
       (evil-snipe-local-mode -1))))
 
@@ -676,10 +678,10 @@ WON-P indicates whether the last spin was a win."
     (insert (propertize "Commands:\n" 'face 'bold))
     (insert "─────────\n")
     (insert "s - Spin wheel          b - Place bet         c - Clear bets\n")
-    (insert "p - Repeat last bet     t - Toggle game type  h - Show history\n")
-    (insert "r - Reset bankroll      a - Analyze sequence  ? - Help\n")
+    (insert "p - Repeat last bet     * - Multiply bets     t - Toggle game type\n")
+    (insert "h - Show history        r - Reset bankroll    a - Analyze sequence\n")
     (insert "m - Martingale mode     f - Fibonacci mode    l - Labouchere mode\n")
-    (insert "q - Quit\n")))
+    (insert "? - Help                q - Quit\n")))
 
 (defun rc-spin-wheel ()
   "Spin the roulette wheel and calculate results."
@@ -858,8 +860,14 @@ Handles 00 for American roulette."
   (when rc-current-bets
     (setq rc-last-cleared-bets rc-current-bets))
   (setq rc-current-bets '())
-  (rc-render-interface)
-  (message "All bets cleared"))
+  ;; Reset any active betting strategy
+  (let ((had-strategy rc-strategy-mode))
+    (when rc-strategy-mode
+      (setq rc-strategy-mode nil)
+      (setq rc-strategy-state nil))
+    (rc-render-interface)
+    (message "All bets cleared%s"
+             (if had-strategy " (strategy disabled)" ""))))
 
 (defun rc-toggle-game-type ()
   "Toggle between European and American roulette."
@@ -935,7 +943,13 @@ Handles 00 for American roulette."
     (princ "------------------\n")
     (princ "• Martingale: Double bet after loss\n")
     (princ "• Fibonacci: Follow Fibonacci sequence\n")
-    (princ "• Labouchere: Cross off numbers system\n")))
+    (princ "• Labouchere: Cross off numbers system\n\n")
+    (princ "Other Commands:\n")
+    (princ "---------------\n")
+    (princ "• * : Multiply all current bets by a factor\n")
+    (princ "  - Quick options: 2x, 0.5x, 3x, 4x, 5x, 10x, etc.\n")
+    (princ "  - Or enter a custom multiplier\n")
+    (princ "  - Useful for doubling up or reducing bet sizes\n")))
 
 (defvar rc-strategy-mode nil
   "Current betting strategy mode.")
@@ -1268,6 +1282,39 @@ When nil, only complete losses (winning nothing) are treated as losses."
                   :original-sequence (mapcar 'string-to-number (split-string sequence))
                   :last-won nil)))
     (message "Labouchere strategy enabled")))
+
+(defun rc-multiply-bets ()
+  "Multiply all current bets by a factor."
+  (interactive)
+  (if (null rc-current-bets)
+      (message "No bets to multiply!")
+    (let* ((input (completing-read "Multiply bets by (or enter custom): " 
+                                   '("2" "0.5" "3" "4" "5" "10" "0.25" "0.75" "1.5" "custom") 
+                                   nil nil))
+           (factor (if (string= input "custom")
+                       (read-number "Enter multiplication factor: " 2.0)
+                     (string-to-number input))))
+      (when (and (numberp factor) (> factor 0))
+        ;; Calculate total after multiplication
+        (let ((new-total 0))
+          (dolist (bet rc-current-bets)
+            (setq new-total (+ new-total (* (rc-bet-amount bet) factor))))
+          
+          (if (> new-total rc-bankroll)
+              (message "Cannot multiply bets by %.2f - would need $%.2f (only have $%.2f)" 
+                       factor new-total rc-bankroll)
+            ;; Update all bets
+            (let ((new-bets '()))
+              (dolist (bet rc-current-bets)
+                (push (make-roulette-calculator-bet 
+                       :type (rc-bet-type bet)
+                       :numbers (rc-bet-numbers bet)
+                       :amount (* (rc-bet-amount bet) factor)
+                       :payout (rc-bet-payout bet))
+                      new-bets))
+              (setq rc-current-bets (nreverse new-bets))
+              (rc-render-interface)
+              (message "All bets multiplied by %.2f" factor))))))))
 
 (defun rc-show-history ()
   "Show detailed betting history."
